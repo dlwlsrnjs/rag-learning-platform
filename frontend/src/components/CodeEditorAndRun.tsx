@@ -150,6 +150,10 @@ function OutputPanel({ result }: { result: PyRunResult }) {
     : "✗ 실행 실패";
   const color = result.ok ? "var(--accent-dark)" : "var(--err)";
 
+  // Exit code 0 with non-empty stderr = warnings/deprecation notices, not failures.
+  // Style them as yellow info, not red errors.
+  const stderrIsWarning = result.ok && !!result.stderr;
+
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={{
@@ -161,6 +165,11 @@ function OutputPanel({ result }: { result: PyRunResult }) {
         fontSize: 13,
       }}>
         <strong style={{ color }}>{statusLabel}</strong>
+        {stderrIsWarning && (
+          <span className="muted" style={{ fontSize: 11 }}>
+            (stderr에 경고 메시지가 있지만 실행은 성공)
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <span className="muted mono" style={{ fontSize: 11 }}>
           {result.duration_ms.toFixed(0)} ms
@@ -177,10 +186,17 @@ function OutputPanel({ result }: { result: PyRunResult }) {
       )}
       {result.stderr && (
         <div>
-          <div style={{ fontSize: 11, marginBottom: 4, color: "var(--err)" }}>stderr</div>
+          <div style={{
+            fontSize: 11, marginBottom: 4,
+            color: stderrIsWarning ? "#8a5a00" : "var(--err)",
+          }}>
+            {stderrIsWarning ? "⚠ stderr (경고 · 실행에 영향 없음)" : "stderr"}
+          </div>
           <pre style={{
             margin: 0, fontSize: 12, maxHeight: 280, overflow: "auto",
-            color: "var(--err)", background: "#fce9e9", border: "1px solid var(--err)",
+            color: stderrIsWarning ? "#5a3f00" : "var(--err)",
+            background: stderrIsWarning ? "#fff6e5" : "#fce9e9",
+            border: `1px solid ${stderrIsWarning ? "#e0b85a" : "var(--err)"}`,
           }}>{result.stderr}</pre>
         </div>
       )}

@@ -558,6 +558,11 @@ _PREAMBLE = '''# LangGraph ReAct 에이전트 — 캔버스와 동일한 구성
 #   3) python 이_파일.py
 import os
 import sys
+import warnings
+
+# Silence library deprecation noise so stderr shows only real errors.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*LangGraphDeprecated.*")
 
 # Force UTF-8 for stdin/stdout/stderr so Korean text survives on Windows
 # where the default console code page is cp949.

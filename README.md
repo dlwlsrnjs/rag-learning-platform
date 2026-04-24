@@ -1,5 +1,8 @@
 # RAG Learning Site
 
+> 공개 URL로 띄우고 싶다면 → [DEPLOYMENT.md](./DEPLOYMENT.md) (Vercel + Render, push 하면 자동 배포)
+
+
 RAG(검색 증강 생성)을 **시각화·실험·학습**할 수 있는 웹사이트.
 
 ## 지금 되는 것

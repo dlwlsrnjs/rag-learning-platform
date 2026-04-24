@@ -1,0 +1,23 @@
+# Render Blueprint — backend deploy.
+# Usage: on render.com click "New +" → "Blueprint" → point at this repo.
+# Render reads this file and provisions the service.
+
+services:
+  - type: web
+    name: rag-backend
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: backend
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+      - key: ALLOW_PYTHON_EXEC
+        value: "false"           # flip to true only if you know the risk
+      - key: NEWS_API_KEY
+        sync: false              # set manually in Render dashboard (secret)
+      - key: CORS_ORIGINS
+        sync: false              # set to your Vercel URL later

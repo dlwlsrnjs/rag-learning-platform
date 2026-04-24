@@ -14,10 +14,17 @@ import time
 from pathlib import Path
 from queue import Empty, Queue
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..core.stream import ndjson_response
+
+
+def _exec_enabled() -> bool:
+    """Gate the subprocess runner. Default on (local dev); public deploys
+    should set ALLOW_PYTHON_EXEC=false to disable the endpoint, since it
+    runs user-submitted Python on the server."""
+    return os.environ.get("ALLOW_PYTHON_EXEC", "true").lower() in ("true", "1", "yes", "on")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -181,4 +188,10 @@ def _stream_run(req: RunPythonRequest):
 
 @router.post("/stream")
 def run_stream(req: RunPythonRequest):
+    if not _exec_enabled():
+        raise HTTPException(
+            403,
+            "Python execution is disabled on this deployment. "
+            "Set ALLOW_PYTHON_EXEC=true to enable (local/dev only).",
+        )
     return ndjson_response(lambda: _stream_run(req))

@@ -1,0 +1,21 @@
+[project]
+name = "rag-site-backend"
+version = "0.1.0"
+description = "Pipeline spec + execution engine for the RAG learning site"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "openai>=1.50",
+    "numpy>=1.26",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0",
+    "langgraph>=0.2.50",
+    "langchain-core>=0.3.20",
+    "langchain-openai>=0.2.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

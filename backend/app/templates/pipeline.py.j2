@@ -1,0 +1,67 @@
+"""Auto-generated from a RAG pipeline spec.
+
+This single file reproduces what the web UI runs. Read top to bottom to see
+how each stage of RAG works: load -> chunk -> embed -> retrieve -> generate.
+"""
+import os
+import numpy as np
+from openai import OpenAI
+
+API_KEY = os.environ.get("OPENAI_API_KEY")
+assert API_KEY, "Set OPENAI_API_KEY before running."
+client = OpenAI(api_key=API_KEY)
+
+# --- 1. Load ------------------------------------------------------------
+{% if loader.source.startswith("demo:") %}
+DOC_PATH = "demo_docs/{{ loader.source[5:] }}"
+with open(DOC_PATH, encoding="utf-8") as f:
+    text = f.read()
+{% elif loader.source.startswith("text:") %}
+text = {{ loader.source[5:] | tojson }}
+{% else %}
+text = open("{{ loader.source }}", encoding="utf-8").read()
+{% endif %}
+
+# --- 2. Chunk ({{ chunker.strategy or "recursive" }}) -------------------
+CHUNK_SIZE = {{ chunker.chunk_size or 500 }}
+CHUNK_OVERLAP = {{ chunker.chunk_overlap or 50 }}
+
+def chunk_text(t: str, size: int, overlap: int) -> list[str]:
+    out, i = [], 0
+    while i < len(t):
+        out.append(t[i:i + size])
+        i += size - overlap
+    return out
+
+chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
+
+# --- 3. Embed -----------------------------------------------------------
+EMBED_MODEL = "{{ embedder.model or 'text-embedding-3-small' }}"
+emb_resp = client.embeddings.create(model=EMBED_MODEL, input=chunks)
+vectors = np.array([d.embedding for d in emb_resp.data], dtype=np.float32)
+
+# --- 4. Retrieve (cosine top-k) ----------------------------------------
+QUERY = {{ query | tojson }}
+TOP_K = {{ retriever.top_k or 4 }}
+
+q_resp = client.embeddings.create(model=EMBED_MODEL, input=[QUERY])
+q_vec = np.array(q_resp.data[0].embedding, dtype=np.float32)
+
+mat = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-12)
+qn = q_vec / (np.linalg.norm(q_vec) + 1e-12)
+sims = mat @ qn
+top_idx = np.argsort(sims)[-TOP_K:][::-1]
+retrieved = [chunks[i] for i in top_idx]
+
+# --- 5. Generate --------------------------------------------------------
+context_block = "\n\n".join(f"[{i+1}] {c}" for i, c in enumerate(retrieved))
+messages = [
+    {"role": "system", "content": "Answer using ONLY the provided context."},
+    {"role": "user", "content": f"Context:\n{context_block}\n\nQuestion: {QUERY}"},
+]
+completion = client.chat.completions.create(
+    model="{{ generator.model or 'gpt-4o-mini' }}",
+    temperature={{ generator.temperature if generator.temperature is defined else 0.2 }},
+    messages=messages,
+)
+print(completion.choices[0].message.content)

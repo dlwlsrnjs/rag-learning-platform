@@ -89,6 +89,19 @@ export type AgentTraceEvent =
   | { type: "tool_result"; name: string; content: string }
   | { type: "assistant"; content: string };
 
+export async function agentCodegen(args: {
+  nodes: { id: string; type: string; params: Record<string, unknown> }[];
+  query: string;
+}): Promise<{ code: string }> {
+  const res = await fetch(`${BASE}/agent/codegen`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) throw new Error(`agent codegen failed: ${res.status}`);
+  return res.json();
+}
+
 export async function runAgent(args: {
   query: string;
   nodes: { id: string; type: string; params: Record<string, unknown> }[];

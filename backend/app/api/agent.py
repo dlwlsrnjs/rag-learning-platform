@@ -544,3 +544,352 @@ def _stream_agent(req: AgentRunRequest):
 @router.post("/run/stream")
 def run_stream(req: AgentRunRequest):
     return ndjson_response(lambda: _stream_agent(req))
+
+
+# ------------------------------------------------------------------
+# Codegen: render the current canvas as a self-contained Python file
+# that uses the SAME tool logic as _make_tool (no stubs).
+# ------------------------------------------------------------------
+
+_PREAMBLE = '''# LangGraph ReAct 에이전트 — 캔버스와 동일한 구성
+# 실행 방법:
+#   1) pip install langchain-core langchain-openai langgraph numpy openai
+#   2) export OPENAI_API_KEY=...   (Windows PowerShell: $env:OPENAI_API_KEY="...")
+#   3) python 이_파일.py
+import os
+import sys
+
+# Force UTF-8 for stdin/stdout/stderr so Korean text survives on Windows
+# where the default console code page is cp949.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+'''
+
+
+def _py_func_name(node_type: str, params: dict[str, Any]) -> str:
+    base = node_type.replace("tool_", "")
+    if node_type == "tool_rag_retrieve":
+        src = str(params.get("source", "default"))
+        slug = src.replace("demo:", "").replace(".md", "").replace("-", "_").replace(".", "_")
+        return f"{base}__{slug}"
+    if node_type == "tool_unit_convert":
+        return f"{base}__{params.get('category', 'length')}"
+    if node_type == "tool_translate_text":
+        return f"{base}__{params.get('target_lang', 'en')}"
+    if node_type == "tool_regex_extract":
+        return f"{base}__{params.get('pattern_preset', 'email')}"
+    if node_type == "tool_summarize_doc":
+        src = str(params.get("source", "default"))
+        slug = src.replace("demo:", "").replace(".md", "").replace("-", "_").replace(".", "_")
+        style = params.get("style", "bullets")
+        return f"{base}__{slug}_{style}"
+    return base
+
+
+def _tool_def_source(node_type: str, params: dict[str, Any], name: str) -> str:
+    """Functional Python source for a single tool, matching _make_tool semantics."""
+    if node_type == "tool_calculator":
+        return f'''
+@tool
+def {name}(expression: str) -> str:
+    """파이썬 산술식을 계산해 결과를 문자열로 반환합니다."""
+    import math
+    if len(expression) > 300:
+        return "식이 너무 깁니다 (300자 제한)."
+    safe = {{
+        "__builtins__": {{}},
+        "abs": abs, "min": min, "max": max, "round": round,
+        "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
+        "tan": math.tan, "log": math.log, "exp": math.exp,
+        "pi": math.pi, "e": math.e, "pow": pow,
+    }}
+    try:
+        return str(eval(expression, safe, {{}}))
+    except Exception as ex:
+        return f"식 평가 실패: {{type(ex).__name__}}: {{ex}}"
+'''
+
+    if node_type == "tool_current_time":
+        tz = str(params.get("timezone", "Asia/Seoul"))
+        fmt = str(params.get("format", "%Y-%m-%d %H:%M:%S"))
+        return f'''
+@tool
+def {name}() -> str:
+    """현재 시간을 {tz} 기준 반환."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo({tz!r})
+    except Exception:
+        tz = None
+    now = datetime.now(tz) if tz else datetime.now()
+    return now.strftime({fmt!r}) + (f" ({tz!r})" if tz else "")
+'''
+
+    if node_type == "tool_regex_extract":
+        preset = str(params.get("pattern_preset", "email"))
+        pattern = REGEX_PRESETS.get(preset, REGEX_PRESETS["email"])
+        return f'''
+@tool
+def {name}(text: str) -> str:
+    """{preset!r} 패턴을 텍스트에서 추출."""
+    import re
+    pattern = {pattern!r}
+    matches = re.findall(pattern, text)
+    if not matches:
+        return "(패턴 {preset!r} 매칭 없음)"
+    unique = list(dict.fromkeys(matches))
+    return "\\n".join(f"- {{m}}" for m in unique[:50])
+'''
+
+    if node_type == "tool_unit_convert":
+        category = str(params.get("category", "length"))
+        return f'''
+@tool
+def {name}(value: float, from_unit: str, to_unit: str) -> str:
+    """단위 변환 ({category})."""
+    _LENGTH = {{"m": 1.0, "cm": 100.0, "mm": 1000.0, "km": 0.001,
+               "mi": 0.000621371, "ft": 3.28084, "in": 39.3701}}
+    _MASS = {{"kg": 1.0, "g": 1000.0, "mg": 1_000_000.0, "lb": 2.20462, "oz": 35.274}}
+    category = {category!r}
+    try:
+        value = float(value)
+    except Exception:
+        return f"숫자가 아님: {{value!r}}"
+    if category == "temperature":
+        fu, tu = from_unit.upper(), to_unit.upper()
+        to_c = {{"C": lambda v: v, "F": lambda v: (v - 32) * 5 / 9, "K": lambda v: v - 273.15}}
+        from_c = {{"C": lambda c: c, "F": lambda c: c * 9 / 5 + 32, "K": lambda c: c + 273.15}}
+        if fu not in to_c or tu not in from_c:
+            return f"지원 단위: C, F, K"
+        c = to_c[fu](value)
+        return f"{{value}} {{fu}} = {{from_c[tu](c):.4g}} {{tu}}"
+    table = _LENGTH if category == "length" else _MASS
+    if from_unit not in table or to_unit not in table:
+        return f"지원 단위: {{list(table.keys())}}"
+    base = value / table[from_unit]
+    return f"{{value}} {{from_unit}} = {{base * table[to_unit]:.4g}} {{to_unit}}"
+'''
+
+    if node_type == "tool_word_count":
+        return f'''
+@tool
+def {name}(text: str) -> str:
+    """글자·단어·줄 수를 세어 반환."""
+    chars = len(text)
+    words = len(text.split())
+    lines = text.count("\\n") + 1
+    return f"글자 {{chars}}자 · 단어 {{words}}개 · 줄 {{lines}}줄"
+'''
+
+    if node_type == "tool_rag_retrieve":
+        source = str(params.get("source", "demo:news_ai_ethics_kr.md"))
+        path = source.replace("demo:", "demo_docs/")
+        top_k = int(params.get("top_k", 3))
+        chunk_size = int(params.get("chunk_size", 400))
+        chunk_overlap = int(params.get("chunk_overlap", 40))
+        return f'''
+@tool
+def {name}(query: str) -> str:
+    """{path} 문서에서 query와 가장 관련 있는 상위 {top_k}개 청크를 반환."""
+    from pathlib import Path
+    import hashlib, math as _m
+    import numpy as np
+
+    def _hash_embed(text, dim=256):
+        h = hashlib.sha256(text.encode("utf-8")).digest()
+        vec = [(h[i % len(h)] / 127.5) - 1.0 for i in range(dim)]
+        n = _m.sqrt(sum(x * x for x in vec)) or 1.0
+        return [x / n for x in vec]
+
+    def _fixed_chunk(t, size, overlap):
+        out, i = [], 0
+        while i < len(t):
+            out.append(t[i:i+size])
+            i += size - overlap
+        return out
+
+    def _recursive_chunk(t, size, overlap):
+        seps = ["\\n\\n", "\\n", ". ", " "]
+        pieces = [t]
+        for sep in seps:
+            nxt = []
+            for p in pieces:
+                if len(p) <= size:
+                    nxt.append(p)
+                else:
+                    nxt.extend(p.split(sep))
+            pieces = nxt
+        chunks, buf = [], ""
+        for p in pieces:
+            if not p.strip(): continue
+            if len(buf) + len(p) + 1 <= size:
+                buf = (buf + " " + p).strip() if buf else p
+            else:
+                if buf: chunks.append(buf)
+                if len(p) > size:
+                    chunks.extend(_fixed_chunk(p, size, overlap))
+                    buf = ""
+                else:
+                    buf = p
+        if buf: chunks.append(buf)
+        if overlap > 0 and len(chunks) > 1:
+            merged = [chunks[0]]
+            for c in chunks[1:]:
+                tail = merged[-1][-overlap:]
+                merged.append(tail + c)
+            chunks = merged
+        return chunks
+
+    text = Path({path!r}).read_text(encoding="utf-8")
+    chunks = _recursive_chunk(text, {chunk_size}, {chunk_overlap})
+    if not chunks:
+        return "(문서에서 청크를 만들 수 없습니다)"
+    vecs = np.array([_hash_embed(c) for c in chunks], dtype=np.float32)
+    qv = np.array(_hash_embed(query), dtype=np.float32)
+    v = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-12)
+    q = qv / (np.linalg.norm(qv) + 1e-12)
+    sims = v @ q
+    k = min({top_k}, len(chunks))
+    idx = np.argsort(sims)[-k:][::-1]
+    lines = [f"[{{rank+1}}] (sim={{float(sims[int(i)]):.3f}}) {{chunks[int(i)]}}"
+             for rank, i in enumerate(idx)]
+    return "\\n\\n".join(lines)
+'''
+
+    if node_type == "tool_read_demo_doc":
+        max_chars = int(params.get("max_chars", 2000))
+        return f'''
+@tool
+def {name}(filename: str) -> str:
+    """demo_docs 디렉토리의 파일을 최대 {max_chars}자까지 반환."""
+    from pathlib import Path
+    path = Path("demo_docs") / filename
+    if not path.exists():
+        return f"(파일 없음: {{path.name}})"
+    text = path.read_text(encoding="utf-8")
+    return text[:{max_chars}] + ("…" if len(text) > {max_chars} else "")
+'''
+
+    if node_type == "tool_translate_text":
+        target = str(params.get("target_lang", "en"))
+        return f'''
+@tool
+def {name}(text: str) -> str:
+    """텍스트를 {target}로 번역 (OpenAI gpt-4o-mini)."""
+    from openai import OpenAI
+    client = OpenAI()  # reads OPENAI_API_KEY from env
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini", temperature=0,
+        messages=[
+            {{"role": "system", "content": f"Translate the given text to language code {target!r}. Return only the translation, no commentary."}},
+            {{"role": "user", "content": text}},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+'''
+
+    if node_type == "tool_summarize_doc":
+        source = str(params.get("source", "demo:news_ai_ethics_kr.md"))
+        path = source.replace("demo:", "demo_docs/")
+        style = str(params.get("style", "bullets"))
+        return f'''
+@tool
+def {name}() -> str:
+    """{path} 문서를 {style} 스타일로 한국어 요약 (OpenAI)."""
+    from pathlib import Path
+    from openai import OpenAI
+    text = Path({path!r}).read_text(encoding="utf-8")[:5000]
+    style_prompts = {{
+        "bullets": "한국어로 핵심만 3~5개의 불릿 포인트로 요약하세요.",
+        "one_line": "한국어로 한 문장으로 요약하세요.",
+        "formal": "한국어로 ##섹션 헤딩을 포함한 구조적 요약을 작성하세요.",
+    }}
+    resp = OpenAI().chat.completions.create(
+        model="gpt-4o-mini", temperature=0.2,
+        messages=[
+            {{"role": "system", "content": style_prompts.get({style!r}, style_prompts["bullets"])}},
+            {{"role": "user", "content": text}},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+'''
+
+    return f"# unsupported tool: {node_type}\n"
+
+
+def _generate_agent_python(nodes: list[NodeCfg], query: str) -> str:
+    agent_cfg = next((n for n in nodes if n.type == "agent"), None)
+    model = "gpt-4o-mini"
+    temperature = 0.2
+    system_prompt = "당신은 도구를 활용해 사용자 질문에 정확히 답하는 한국어 조수입니다."
+    if agent_cfg:
+        model = str(agent_cfg.params.get("model", model))
+        temperature = float(agent_cfg.params.get("temperature", temperature))
+        system_prompt = str(agent_cfg.params.get("system_prompt") or system_prompt)
+
+    # Dedupe tools by (type, params) so identical configs share one def.
+    import json as _json
+    seen: dict[str, str] = {}
+    refs: list[str] = []
+    defs: list[str] = []
+    for n in nodes:
+        if n.type == "agent":
+            continue
+        key = n.type + "|" + _json.dumps(n.params, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            refs.append(seen[key])
+            continue
+        name = _py_func_name(n.type, n.params)
+        seen[key] = name
+        refs.append(name)
+        defs.append(_tool_def_source(n.type, n.params, name))
+
+    # Build runner.
+    import json as _json2
+    runner = f'''
+llm = ChatOpenAI(
+    model={model!r},
+    temperature={temperature},
+    api_key=os.environ["OPENAI_API_KEY"],
+)
+
+agent = create_react_agent(
+    llm,
+    tools=[{", ".join(refs) if refs else ""}],
+    prompt={_json2.dumps(system_prompt, ensure_ascii=False)},
+)
+
+QUERY = {_json2.dumps(query, ensure_ascii=False)}
+result = agent.invoke({{"messages": [("user", QUERY)]}}, config={{"recursion_limit": 15}})
+
+# Print a trimmed trace + final answer.
+for m in result["messages"]:
+    tag = type(m).__name__
+    if hasattr(m, "tool_calls") and getattr(m, "tool_calls", None):
+        for tc in m.tool_calls:
+            nm = tc.get("name") if isinstance(tc, dict) else tc["name"]
+            args = tc.get("args") if isinstance(tc, dict) else tc["args"]
+            print(f"[{{tag}}] tool_call {{nm}}({{args}})")
+    else:
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        print(f"[{{tag}}] {{content[:400]}}")
+'''
+    return _PREAMBLE + "\n" + "\n".join(defs) + runner
+
+
+class CodegenRequest(BaseModel):
+    nodes: list[NodeCfg]
+    query: str = ""
+
+
+@router.post("/codegen")
+def codegen(req: CodegenRequest) -> dict:
+    return {"code": _generate_agent_python(req.nodes, req.query)}

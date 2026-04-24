@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -18,6 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import {
+  agentCodegen,
   getAgentNodeTypes,
   listNewsSamples,
   type AgentTraceEvent,
@@ -157,6 +158,7 @@ export default function LangGraphLabPage() {
     trace: AgentTraceEvent[];
     model: string;
   } | null>(null);
+  const [generatedCode, setGeneratedCode] = useState<string>("# 캔버스가 준비되면 여기에 코드가 나타납니다.");
 
   useEffect(() => {
     getAgentNodeTypes().then(setSchemas).catch((e) => setErr(e.message));
@@ -276,6 +278,19 @@ export default function LangGraphLabPage() {
     const d = n.data as unknown as PipelineNodeData;
     return { id: n.id, type: d.nodeType, params: d.params };
   }), [nodes]);
+
+  // Fetch authoritative Python codegen from backend whenever the canvas or
+  // query changes (debounced). This guarantees the "Generated Python" box
+  // mirrors exactly what /agent/run executes — same tool implementations.
+  useEffect(() => {
+    if (currentNodes.length === 0) return;
+    const handle = setTimeout(() => {
+      agentCodegen({ nodes: currentNodes, query })
+        .then((r) => setGeneratedCode(r.code))
+        .catch(() => { /* leave previous code */ });
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [currentNodes, query]);
 
   async function onRun() {
     if (!apiKey) { setErr("OpenAI API 키가 필요합니다."); return; }
@@ -461,8 +476,8 @@ export default function LangGraphLabPage() {
       {nodes.length > 0 && (
         <CodeEditorAndRun
           title="Generated Python (LangGraph)"
-          subtitle="현재 캔버스에서 추출 · 편집 가능, ▶ Run 으로 직접 실행"
-          initialCode={generateLangGraphPython(currentNodes, query)}
+          subtitle="백엔드 툴 구현과 동일 · 편집 가능, ▶ Run 으로 직접 실행"
+          initialCode={generatedCode}
         />
       )}
 
@@ -540,176 +555,4 @@ function TraceItem({ ev, index }: { ev: AgentTraceEvent; index: number }) {
       </div>
     </div>
   );
-}
-
-function generateLangGraphPython(
-  nodes: { id: string; type: string; params: Record<string, unknown> }[],
-  query: string,
-): string {
-  const agent = nodes.find((n) => n.type === "agent");
-  const tools = nodes.filter((n) => n.type !== "agent");
-  const defs: string[] = [];
-  const refs: string[] = [];
-  const used = new Set<string>();
-
-  for (const t of tools) {
-    const key = `${t.type}__${JSON.stringify(t.params)}`;
-    if (used.has(key)) continue; // skip duplicate configs in Python sample
-    used.add(key);
-    const ref = pyToolFunctionName(t);
-    refs.push(ref);
-    defs.push(pyToolDefinition(t, ref));
-  }
-
-  const model = String(agent?.params.model ?? "gpt-4o-mini");
-  const temp = Number(agent?.params.temperature ?? 0.2);
-  const sysPrompt = String(agent?.params.system_prompt ?? "당신은 한국어 조수입니다.");
-
-  return `# LangGraph ReAct 에이전트 — 현재 캔버스와 동일한 구성
-import os
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
-
-${defs.join("\n\n") || "# (등록된 툴 없음)"}
-
-llm = ChatOpenAI(
-    model="${model}",
-    temperature=${temp},
-    api_key=os.environ["OPENAI_API_KEY"],
-)
-
-agent = create_react_agent(
-    llm,
-    tools=[${refs.join(", ")}],
-    prompt=${JSON.stringify(sysPrompt)},
-)
-
-result = agent.invoke({"messages": [("user", ${JSON.stringify(query)})]})
-for m in result["messages"]:
-    print(type(m).__name__, "-", m.content[:200] if hasattr(m, "content") else m)
-`;
-}
-
-function pyToolFunctionName(t: { type: string; params: Record<string, unknown> }) {
-  const base = t.type.replace("tool_", "");
-  // Suffix based on params for uniqueness when multiple of same type.
-  if (t.type === "tool_rag_retrieve" && t.params.source) {
-    return `${base}__${String(t.params.source).replace(/[^a-z0-9]/gi, "_")}`;
-  }
-  if (t.type === "tool_unit_convert" && t.params.category) {
-    return `${base}__${String(t.params.category)}`;
-  }
-  if (t.type === "tool_translate_text" && t.params.target_lang) {
-    return `${base}__${String(t.params.target_lang)}`;
-  }
-  if (t.type === "tool_regex_extract" && t.params.pattern_preset) {
-    return `${base}__${String(t.params.pattern_preset)}`;
-  }
-  return base;
-}
-
-function pyToolDefinition(
-  t: { type: string; params: Record<string, unknown> },
-  refName: string,
-): string {
-  const p = t.params;
-  switch (t.type) {
-    case "tool_calculator":
-      return `@tool
-def ${refName}(expression: str) -> str:
-    """산술식을 계산해 결과 반환."""
-    import math
-    safe = {"__builtins__": {}, "sqrt": math.sqrt, "pi": math.pi, "e": math.e,
-            "abs": abs, "min": min, "max": max, "round": round, "pow": pow}
-    return str(eval(expression, safe, {}))`;
-    case "tool_current_time":
-      return `@tool
-def ${refName}() -> str:
-    """현재 시간을 ${p.timezone ?? "Asia/Seoul"} 기준 ${p.format ?? "%Y-%m-%d %H:%M:%S"} 포맷으로 반환."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    return datetime.now(ZoneInfo(${JSON.stringify(p.timezone ?? "Asia/Seoul")})).strftime(${JSON.stringify(p.format ?? "%Y-%m-%d %H:%M:%S")})`;
-    case "tool_regex_extract":
-      return `@tool
-def ${refName}(text: str) -> str:
-    """텍스트에서 ${p.pattern_preset ?? "email"} 패턴을 추출."""
-    import re
-    pattern = ${JSON.stringify(patternFor(String(p.pattern_preset ?? "email")))}
-    matches = re.findall(pattern, text)
-    return "\\n".join(f"- {m}" for m in matches) or "(매칭 없음)"`;
-    case "tool_unit_convert":
-      return `@tool
-def ${refName}(value: float, from_unit: str, to_unit: str) -> str:
-    """${p.category ?? "length"} 카테고리의 단위를 변환."""
-    # (실전에서는 pint 같은 라이브러리를 쓰세요)
-    return f"{value} {from_unit} → {to_unit}로 변환"`;
-    case "tool_word_count":
-      return `@tool
-def ${refName}(text: str) -> str:
-    """글자·단어·줄 수 반환."""
-    return f"글자 {len(text)}자 · 단어 {len(text.split())}개 · 줄 {text.count(chr(10)) + 1}줄"`;
-    case "tool_rag_retrieve":
-      return `@tool
-def ${refName}(query: str) -> str:
-    """${p.source} 문서에서 query 관련 상위 ${p.top_k ?? 3}개 청크 반환."""
-    from pathlib import Path
-    text = Path(${JSON.stringify(String(p.source ?? "demo:").replace("demo:", "demo_docs/"))}).read_text("utf-8")
-    # 청킹·임베딩·검색은 생략 (서버 쪽 구현 참고)
-    return "(상위 청크들)"`;
-    case "tool_read_demo_doc":
-      return `@tool
-def ${refName}(filename: str) -> str:
-    """demo_docs 내 파일을 최대 ${p.max_chars ?? 2000}자까지 반환."""
-    from pathlib import Path
-    return (Path("demo_docs") / filename).read_text("utf-8")[:${p.max_chars ?? 2000}]`;
-    case "tool_translate_text":
-      return `@tool
-def ${refName}(text: str) -> str:
-    """텍스트를 ${p.target_lang ?? "en"}로 번역 (OpenAI gpt-4o-mini)."""
-    from openai import OpenAI
-    client = OpenAI()
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini", temperature=0,
-        messages=[
-            {"role": "system", "content": f"Translate to ${p.target_lang ?? "en"}. Return only the translation."},
-            {"role": "user", "content": text},
-        ],
-    )
-    return resp.choices[0].message.content`;
-    case "tool_summarize_doc":
-      return `@tool
-def ${refName}() -> str:
-    """${p.source} 문서를 ${p.style ?? "bullets"} 스타일로 요약 (OpenAI gpt-4o-mini)."""
-    from pathlib import Path
-    from openai import OpenAI
-    text = Path(${JSON.stringify(String(p.source ?? "demo:").replace("demo:", "demo_docs/"))}).read_text("utf-8")[:5000]
-    style_prompts = {
-        "bullets": "한국어로 3~5개 불릿 요약.",
-        "one_line": "한국어로 한 문장 요약.",
-        "formal": "한국어로 섹션 헤딩 포함한 구조적 요약.",
-    }
-    resp = OpenAI().chat.completions.create(
-        model="gpt-4o-mini", temperature=0.2,
-        messages=[
-            {"role": "system", "content": style_prompts[${JSON.stringify(p.style ?? "bullets")}]},
-            {"role": "user", "content": text},
-        ],
-    )
-    return resp.choices[0].message.content`;
-    default:
-      return `# unsupported tool: ${t.type}`;
-  }
-}
-
-function patternFor(preset: string): string {
-  const map: Record<string, string> = {
-    email: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
-    phone_kr: "01[016-9][-\\s]?\\d{3,4}[-\\s]?\\d{4}",
-    url: "https?://[^\\s<>\"]+",
-    date: "\\d{4}[-./]\\d{1,2}[-./]\\d{1,2}",
-    hashtag: "#[\\w가-힣]+",
-    number: "-?\\d+(?:\\.\\d+)?",
-  };
-  return map[preset] ?? map.email;
 }

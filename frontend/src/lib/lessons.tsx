@@ -56,11 +56,11 @@ const specFor = (source: string, query: string, topK = 3): PipelineSpec => ({
   ],
 });
 
-const P = ({ children }: { children: ReactNode }) => (
-  <p style={{ margin: "0 0 8px" }}>{children}</p>
+const P = ({ children, className }: { children: ReactNode; className?: string }) => (
+  <p className={className} style={{ margin: "0 0 8px" }}>{children}</p>
 );
-const H = ({ children }: { children: ReactNode }) => (
-  <h4 style={{ margin: "10px 0 6px" }}>{children}</h4>
+const H = ({ children, className }: { children: ReactNode; className?: string }) => (
+  <h4 className={className} style={{ margin: "10px 0 6px" }}>{children}</h4>
 );
 const Li = ({ children }: { children: ReactNode }) => (
   <li style={{ marginBottom: 4 }}>{children}</li>

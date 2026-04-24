@@ -72,6 +72,10 @@ def _stream_run(req: RunPythonRequest):
     # 2) Build env. Pass the user's OpenAI key as env var so generated code
     #    that reads os.environ["OPENAI_API_KEY"] works.
     env = os.environ.copy()
+    # Force UTF-8 for stdin/stdout/stderr so Korean text survives the
+    # subprocess boundary on Windows (default is cp949 when stdout is a pipe).
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     if req.api_key:
         env["OPENAI_API_KEY"] = req.api_key
 

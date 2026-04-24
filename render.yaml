@@ -16,7 +16,10 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.10"
       - key: ALLOW_PYTHON_EXEC
-        value: "false"           # flip to true only if you know the risk
+        value: "true"            # intentional: educational demo, server-side exec enabled
+        # security note: server env vars (e.g. NEWS_API_KEY) become readable
+        # via user-submitted `print(os.environ)`. The NewsAPI key here is
+        # free-tier / easily rotated, so we accept the tradeoff.
       - key: NEWS_API_KEY
         sync: false              # set manually in Render dashboard (secret)
       - key: CORS_ORIGINS
